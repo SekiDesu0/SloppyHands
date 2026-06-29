@@ -34,16 +34,18 @@ void DeviceProvider::RunFrame() {
 
     bool want_proxy = VTableHook::VirtualEnabled();
 
-    // Add proxy devices as soon as Quest controllers are detected
-    // (they stay registered — when disabled they report invalid pose)
-    if (VTableHook::IsQuestDetected(vr::TrackedControllerRole_LeftHand)) {
+    // Only register proxy devices when virtual controllers are enabled,
+    // so SteamVR status window shows a clean pair of controllers at boot.
+    // Once registered they persist (no TrackedDeviceRemoved API) but report
+    // valid/invalid pose per-frame based on the toggle state.
+    if (want_proxy && VTableHook::IsQuestDetected(vr::TrackedControllerRole_LeftHand)) {
         if (!proxy_left_added_) {
             proxy_left_added_ = vr::VRServerDriverHost()->TrackedDeviceAdded(
                 "sample_knuckles_left", vr::TrackedDeviceClass_Controller, proxy_left_.get());
             vr::VRDriverLog()->Log(proxy_left_added_ ? "[Proxy] Left added" : "[Proxy] Left add FAILED");
         }
     }
-    if (VTableHook::IsQuestDetected(vr::TrackedControllerRole_RightHand)) {
+    if (want_proxy && VTableHook::IsQuestDetected(vr::TrackedControllerRole_RightHand)) {
         if (!proxy_right_added_) {
             proxy_right_added_ = vr::VRServerDriverHost()->TrackedDeviceAdded(
                 "sample_knuckles_right", vr::TrackedDeviceClass_Controller, proxy_right_.get());

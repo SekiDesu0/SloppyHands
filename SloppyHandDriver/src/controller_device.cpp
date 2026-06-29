@@ -5,7 +5,11 @@
 #include <cstring>
 
 KnucklesProxyDevice::KnucklesProxyDevice(vr::ETrackedControllerRole role)
-    : role_(role), device_id_(vr::k_unTrackedDeviceIndexInvalid), activated_(false)
+    : role_(role), device_id_(vr::k_unTrackedDeviceIndexInvalid), activated_(false),
+      smoothed_rot_({1.f, 0.f, 0.f, 0.f}), rot_initialized_(false),
+      raw_prev_rot_({1.f, 0.f, 0.f, 0.f}), raw_prev_valid_(false),
+      smoothed_pos_({0.f, 0.f, 0.f}), pos_initialized_(false),
+      raw_prev_pos_({0.f, 0.f, 0.f}), raw_prev_pos_valid_(false)
 {
     handles_.fill(0);
 }
@@ -181,8 +185,7 @@ vr::DriverPose_t KnucklesProxyDevice::GetPose()
     if (quest_idx != vr::k_unTrackedDeviceIndexInvalid)
     {
         vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount];
-        // Light prediction to reduce perceived latency without overshoot
-        vr::VRServerDriverHost()->GetRawTrackedDevicePoses(0.005f, poses, vr::k_unMaxTrackedDeviceCount);
+        vr::VRServerDriverHost()->GetRawTrackedDevicePoses(0.0f, poses, vr::k_unMaxTrackedDeviceCount);
 
         const vr::TrackedDevicePose_t& qp = poses[quest_idx];
         if (qp.bPoseIsValid)
@@ -191,6 +194,9 @@ vr::DriverPose_t KnucklesProxyDevice::GetPose()
             pose.vecPosition[1] = qp.mDeviceToAbsoluteTracking.m[1][3];
             pose.vecPosition[2] = qp.mDeviceToAbsoluteTracking.m[2][3];
 
+            vr::HmdVector3_t raw_pos = { pose.vecPosition[0], pose.vecPosition[1], pose.vecPosition[2] };
+
+            // Extract raw rotation from matrix (must happen before pivot offset)
             const auto& m = qp.mDeviceToAbsoluteTracking;
             float tr = m.m[0][0] + m.m[1][1] + m.m[2][2];
             if (tr > 0.0f)
@@ -226,6 +232,146 @@ vr::DriverPose_t KnucklesProxyDevice::GetPose()
                 pose.qRotation.z = 0.25f * S;
             }
 
+            // Apply pivot offset: rotate local offset into world space and add to raw position
+            {
+                vr::HmdVector3_t offset = VTableHook::GetPivotOffset(role_);
+                float qw = (float)pose.qRotation.w, qx = (float)pose.qRotation.x, qy = (float)pose.qRotation.y, qz = (float)pose.qRotation.z;
+                float ox = offset.v[0], oy = offset.v[1], oz = offset.v[2];
+
+                // cross1 = q_xyz × offset
+                float cx1 = qy * oz - qz * oy;
+                float cy1 = qz * ox - qx * oz;
+                float cz1 = qx * oy - qy * ox;
+
+                // cross2 = q_xyz × cross1
+                float cx2 = qy * cz1 - qz * cy1;
+                float cy2 = qz * cx1 - qx * cz1;
+                float cz2 = qx * cy1 - qy * cx1;
+
+                // result = offset + 2*qw*cross1 + 2*cross2
+                raw_pos.v[0] += ox + 2.0f * qw * cx1 + 2.0f * cx2;
+                raw_pos.v[1] += oy + 2.0f * qw * cy1 + 2.0f * cy2;
+                raw_pos.v[2] += oz + 2.0f * qw * cz1 + 2.0f * cz2;
+            }
+
+            // Adaptive position smoothing: heavy at rest, near-raw on fast moves
+            float pos_blend;
+            if (raw_prev_pos_valid_)
+            {
+                float dx = raw_pos.v[0] - raw_prev_pos_.v[0];
+                float dy = raw_pos.v[1] - raw_prev_pos_.v[1];
+                float dz = raw_pos.v[2] - raw_prev_pos_.v[2];
+                float pos_delta = sqrtf(dx * dx + dy * dy + dz * dz);
+
+                const float lo_p = 0.002f;   // m/frame: jitter threshold
+                const float hi_p = 0.030f;   // m/frame: fast-arm-swing threshold
+                if (pos_delta < lo_p)
+                    pos_blend = 0.20f;
+                else if (pos_delta > hi_p)
+                    pos_blend = 0.90f;
+                else
+                    pos_blend = 0.20f + (0.90f - 0.20f) * (pos_delta - lo_p) / (hi_p - lo_p);
+            }
+            else
+            {
+                pos_blend = 1.0f;
+            }
+            raw_prev_pos_ = raw_pos;
+            raw_prev_pos_valid_ = true;
+
+            if (!pos_initialized_)
+            {
+                smoothed_pos_ = raw_pos;
+                pos_initialized_ = true;
+            }
+            else
+            {
+                smoothed_pos_.v[0] += pos_blend * (raw_pos.v[0] - smoothed_pos_.v[0]);
+                smoothed_pos_.v[1] += pos_blend * (raw_pos.v[1] - smoothed_pos_.v[1]);
+                smoothed_pos_.v[2] += pos_blend * (raw_pos.v[2] - smoothed_pos_.v[2]);
+            }
+            pose.vecPosition[0] = smoothed_pos_.v[0];
+            pose.vecPosition[1] = smoothed_pos_.v[1];
+            pose.vecPosition[2] = smoothed_pos_.v[2];
+
+            // Adaptive blend factor: heavy smoothing at rest, near-raw on fast moves
+            vr::HmdQuaternion_t raw_rot = pose.qRotation;
+            float blend;
+            if (raw_prev_valid_)
+            {
+                float raw_dot = fabsf(raw_prev_rot_.w * raw_rot.w
+                                    + raw_prev_rot_.x * raw_rot.x
+                                    + raw_prev_rot_.y * raw_rot.y
+                                    + raw_prev_rot_.z * raw_rot.z);
+                if (raw_dot > 1.0f) raw_dot = 1.0f;
+                float angle_delta = acosf(raw_dot);
+
+                const float lo = 0.01f;   // rad/frame: jitter threshold
+                const float hi = 0.10f;   // rad/frame: fast-flick threshold
+                if (angle_delta < lo)
+                    blend = 0.20f;
+                else if (angle_delta > hi)
+                    blend = 0.90f;
+                else
+                    blend = 0.20f + (0.90f - 0.20f) * (angle_delta - lo) / (hi - lo);
+            }
+            else
+            {
+                blend = 1.0f;  // first raw sample: no smoothing
+            }
+            raw_prev_rot_ = raw_rot;
+            raw_prev_valid_ = true;
+
+            if (!rot_initialized_)
+            {
+                smoothed_rot_ = pose.qRotation;
+                rot_initialized_ = true;
+            }
+            else
+            {
+                float dot = smoothed_rot_.w * pose.qRotation.w
+                          + smoothed_rot_.x * pose.qRotation.x
+                          + smoothed_rot_.y * pose.qRotation.y
+                          + smoothed_rot_.z * pose.qRotation.z;
+                if (dot < 0.0f)
+                {
+                    pose.qRotation.w = -pose.qRotation.w;
+                    pose.qRotation.x = -pose.qRotation.x;
+                    pose.qRotation.y = -pose.qRotation.y;
+                    pose.qRotation.z = -pose.qRotation.z;
+                    dot = -dot;
+                }
+
+                if (dot > 0.9995f)
+                {
+                    float t1 = 1.0f - blend;
+                    smoothed_rot_.w = t1 * smoothed_rot_.w + blend * pose.qRotation.w;
+                    smoothed_rot_.x = t1 * smoothed_rot_.x + blend * pose.qRotation.x;
+                    smoothed_rot_.y = t1 * smoothed_rot_.y + blend * pose.qRotation.y;
+                    smoothed_rot_.z = t1 * smoothed_rot_.z + blend * pose.qRotation.z;
+                    float norm = sqrtf(smoothed_rot_.w * smoothed_rot_.w
+                                     + smoothed_rot_.x * smoothed_rot_.x
+                                     + smoothed_rot_.y * smoothed_rot_.y
+                                     + smoothed_rot_.z * smoothed_rot_.z);
+                    smoothed_rot_.w /= norm;
+                    smoothed_rot_.x /= norm;
+                    smoothed_rot_.y /= norm;
+                    smoothed_rot_.z /= norm;
+                }
+                else
+                {
+                    float omega = acosf(dot);
+                    float sin_omega = sinf(omega);
+                    float a = sinf((1.0f - blend) * omega) / sin_omega;
+                    float b = sinf(blend * omega) / sin_omega;
+                    smoothed_rot_.w = a * smoothed_rot_.w + b * pose.qRotation.w;
+                    smoothed_rot_.x = a * smoothed_rot_.x + b * pose.qRotation.x;
+                    smoothed_rot_.y = a * smoothed_rot_.y + b * pose.qRotation.y;
+                    smoothed_rot_.z = a * smoothed_rot_.z + b * pose.qRotation.z;
+                }
+                pose.qRotation = smoothed_rot_;
+            }
+
             pose.vecVelocity[0] = qp.vVelocity.v[0];
             pose.vecVelocity[1] = qp.vVelocity.v[1];
             pose.vecVelocity[2] = qp.vVelocity.v[2];
@@ -239,7 +385,7 @@ vr::DriverPose_t KnucklesProxyDevice::GetPose()
     return pose;
 }
 
-void KnucklesProxyDevice::Deactivate() { activated_ = false; }
+void KnucklesProxyDevice::Deactivate() { activated_ = false; rot_initialized_ = false; raw_prev_valid_ = false; pos_initialized_ = false; raw_prev_pos_valid_ = false; }
 void KnucklesProxyDevice::EnterStandby() {}
 void* KnucklesProxyDevice::GetComponent(const char* pchComponentNameAndVersion) { return nullptr; }
 void KnucklesProxyDevice::DebugRequest(const char* pchRequest, char* pchResponseBuffer, uint32_t unResponseBufferSize)

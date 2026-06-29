@@ -190,6 +190,7 @@ struct Config {
     float smooth_deadband = 0.015f;
     int   elec_map[2][10]; // [hand][joint] — source IDs
     std::string saved_mac[2]; // persistent ESP32 MAC → hand assignment
+    float pivot_offset[2][3]; // [hand][xyz] — Quest→Knuckles pivot offset (meters)
 
     Config() {
         for (int i = 0; i < 10; i++) {
@@ -584,6 +585,8 @@ static void WriteToDriver() {
     if (!g_drv_state) return;
     memcpy(g_drv_state->curls_left, g_fused_curls[0], sizeof(float) * 5);
     memcpy(g_drv_state->curls_right, g_fused_curls[1], sizeof(float) * 5);
+    memcpy(g_drv_state->pivot_offset_left, g_cfg.pivot_offset[0], sizeof(float) * 3);
+    memcpy(g_drv_state->pivot_offset_right, g_cfg.pivot_offset[1], sizeof(float) * 3);
     g_drv_state->virtual_enabled = g_virtual_enabled ? 1 : 0;
     g_drv_state->curls_sequence = ++g_curls_seq;
 }
@@ -618,6 +621,8 @@ static void SaveConfig() {
     fprintf(f, "smooth_deadband=%.3f\n", g_cfg.smooth_deadband);
     fprintf(f, "mac_left=%s\n", g_cfg.saved_mac[0].c_str());
     fprintf(f, "mac_right=%s\n", g_cfg.saved_mac[1].c_str());
+    fprintf(f, "pivot_left=%.3f,%.3f,%.3f\n", g_cfg.pivot_offset[0][0], g_cfg.pivot_offset[0][1], g_cfg.pivot_offset[0][2]);
+    fprintf(f, "pivot_right=%.3f,%.3f,%.3f\n", g_cfg.pivot_offset[1][0], g_cfg.pivot_offset[1][1], g_cfg.pivot_offset[1][2]);
     fclose(f);
     LogI("Config saved to %s", GetConfigPath().c_str());
 }
@@ -648,6 +653,18 @@ static void LoadConfig() {
             if (sscanf_s(line, " %63[^=]=%255s", key, (unsigned)sizeof(key), val, (unsigned)sizeof(val)) == 2) {
                 if (strcmp(key, "mac_left") == 0) g_cfg.saved_mac[0] = val;
                 else if (strcmp(key, "mac_right") == 0) g_cfg.saved_mac[1] = val;
+                else if (strcmp(key, "pivot_left") == 0) {
+                    float x = 0, y = 0, z = 0;
+                    if (sscanf_s(val, "%f,%f,%f", &x, &y, &z) >= 3) {
+                        g_cfg.pivot_offset[0][0] = x; g_cfg.pivot_offset[0][1] = y; g_cfg.pivot_offset[0][2] = z;
+                    }
+                }
+                else if (strcmp(key, "pivot_right") == 0) {
+                    float x = 0, y = 0, z = 0;
+                    if (sscanf_s(val, "%f,%f,%f", &x, &y, &z) >= 3) {
+                        g_cfg.pivot_offset[1][0] = x; g_cfg.pivot_offset[1][1] = y; g_cfg.pivot_offset[1][2] = z;
+                    }
+                }
             }
         }
     }
@@ -737,6 +754,10 @@ int main(int argc, char* argv[]) {
                 }
                 if (g_virtual_enabled) ImGui::TextColored(ImVec4(0.5f,1.0f,0.5f,1.0f), "ACTIVE");
                 else ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "DISABLED");
+                ImGui::Separator();
+                ImGui::Text("Pivot Offset (Quest IMU -> Knuckles center)");
+                ImGui::DragFloat3("Left  (X,Y,Z)", g_cfg.pivot_offset[0], 0.001f, -0.1f, 0.1f, "%.3f m");
+                ImGui::DragFloat3("Right (X,Y,Z)", g_cfg.pivot_offset[1], 0.001f, -0.1f, 0.1f, "%.3f m");
                 ImGui::EndTabItem();
             }
 

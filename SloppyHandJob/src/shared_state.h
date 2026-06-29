@@ -23,6 +23,8 @@ struct DriverSharedState
     float    curls_left[5];     // thumb, index, middle, ring, pinky (0-1)
     float    curls_right[5];
     uint32_t curls_sequence;    // GUI increments when updating curls
+    float    pivot_offset_left[3];   // XYZ offset from Quest IMU to Knuckles pivot (meters)
+    float    pivot_offset_right[3];
 
     // ---- Driver -> GUI ----
     uint32_t quest_left_detected;

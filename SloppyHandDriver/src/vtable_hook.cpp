@@ -609,6 +609,20 @@ void VTableHook::StoreHaptic(vr::ETrackedControllerRole role, float amplitude, f
     g_haptic_seq[idx]++;
 }
 
+vr::HmdVector3_t VTableHook::GetPivotOffset(vr::ETrackedControllerRole role)
+{
+    vr::HmdVector3_t offset = { 0.f, 0.f, 0.f };
+    if (!g_shm_state || g_shm_state->magic != DriverSharedState::kMagic)
+        return offset;
+
+    if (role == vr::TrackedControllerRole_LeftHand)
+        { offset.v[0] = g_shm_state->pivot_offset_left[0]; offset.v[1] = g_shm_state->pivot_offset_left[1]; offset.v[2] = g_shm_state->pivot_offset_left[2]; }
+    else if (role == vr::TrackedControllerRole_RightHand)
+        { offset.v[0] = g_shm_state->pivot_offset_right[0]; offset.v[1] = g_shm_state->pivot_offset_right[1]; offset.v[2] = g_shm_state->pivot_offset_right[2]; }
+
+    return offset;
+}
+
 // ---------------------------------------------------------------------------
 // Per-frame skeleton update — called by proxy devices
 // ---------------------------------------------------------------------------

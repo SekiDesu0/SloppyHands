@@ -48,4 +48,16 @@ private:
     vr::ETrackedControllerRole role_;
     vr::TrackedDeviceIndex_t device_id_;
     bool activated_;
+
+    // Rotation smoothing state
+    vr::HmdQuaternion_t smoothed_rot_;
+    bool rot_initialized_;
+    vr::HmdQuaternion_t raw_prev_rot_;
+    bool raw_prev_valid_;
+
+    // Position smoothing state
+    vr::HmdVector3_t smoothed_pos_;
+    bool pos_initialized_;
+    vr::HmdVector3_t raw_prev_pos_;
+    bool raw_prev_pos_valid_;
 };

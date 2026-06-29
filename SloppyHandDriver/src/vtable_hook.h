@@ -71,6 +71,9 @@ public:
 
     // Store a haptic event received by a proxy device
     static void StoreHaptic(vr::ETrackedControllerRole role, float amplitude, float duration);
+
+    // Get the pivot offset for a given hand role (from shared memory, set by GUI)
+    static vr::HmdVector3_t GetPivotOffset(vr::ETrackedControllerRole role);
 };
 
 // Called by proxy device to register its skeleton handle for per-frame updates
