@@ -188,6 +188,8 @@ struct Config {
     float smooth_alpha = 0.35f;
     int   smooth_median = 3;
     float smooth_deadband = 0.015f;
+    float trigger_touch_strength = 0.5f; // scales SRC_TRIGGER_TOUCH output
+    float splay_factor = 0.0f;           // finger splay sent to driver
     int   elec_map[2][10]; // [hand][joint] — source IDs
     std::string saved_mac[2]; // persistent ESP32 MAC → hand assignment
     float pivot_offset[2][3]; // [hand][xyz] — Quest→Knuckles pivot offset (meters)
@@ -515,7 +517,7 @@ static float resolve_source_locked(int hand_idx, int joint_idx, const HandState&
     switch (src) {
         case SRC_TRIGGER:        return left ? g_drv_state->trigger_left  : g_drv_state->trigger_right;
         case SRC_GRIP:           return left ? g_drv_state->grip_left     : g_drv_state->grip_right;
-        case SRC_TRIGGER_TOUCH:  return (left ? g_drv_state->trigger_touch_left  : g_drv_state->trigger_touch_right)  ? 0.5f : 0.0f;
+        case SRC_TRIGGER_TOUCH:  return g_cfg.trigger_touch_strength * ((left ? g_drv_state->trigger_touch_left  : g_drv_state->trigger_touch_right)  ? 1.0f : 0.0f);
         case SRC_GRIP_TOUCH:     return (left ? g_drv_state->grip_touch_left     : g_drv_state->grip_touch_right)     ? 0.5f : 0.0f;
         case SRC_A_TOUCH:        return (left ? g_drv_state->a_touch_left  : g_drv_state->a_touch_right)  ? 0.5f : 0.0f;
         case SRC_B_TOUCH:        return (left ? g_drv_state->b_touch_left  : g_drv_state->b_touch_right)  ? 0.5f : 0.0f;
@@ -587,6 +589,7 @@ static void WriteToDriver() {
     memcpy(g_drv_state->curls_right, g_fused_curls[1], sizeof(float) * 5);
     memcpy(g_drv_state->pivot_offset_left, g_cfg.pivot_offset[0], sizeof(float) * 3);
     memcpy(g_drv_state->pivot_offset_right, g_cfg.pivot_offset[1], sizeof(float) * 3);
+    g_drv_state->splay_factor = g_cfg.splay_factor;
     g_drv_state->virtual_enabled = g_virtual_enabled ? 1 : 0;
     g_drv_state->curls_sequence = ++g_curls_seq;
 }
@@ -619,6 +622,8 @@ static void SaveConfig() {
     fprintf(f, "smooth_alpha=%.2f\n", g_cfg.smooth_alpha);
     fprintf(f, "smooth_median=%d\n", g_cfg.smooth_median);
     fprintf(f, "smooth_deadband=%.3f\n", g_cfg.smooth_deadband);
+    fprintf(f, "trigger_touch_strength=%.2f\n", g_cfg.trigger_touch_strength);
+    fprintf(f, "splay_factor=%.2f\n", g_cfg.splay_factor);
     fprintf(f, "mac_left=%s\n", g_cfg.saved_mac[0].c_str());
     fprintf(f, "mac_right=%s\n", g_cfg.saved_mac[1].c_str());
     fprintf(f, "pivot_left=%.3f,%.3f,%.3f\n", g_cfg.pivot_offset[0][0], g_cfg.pivot_offset[0][1], g_cfg.pivot_offset[0][2]);
@@ -648,6 +653,8 @@ static void LoadConfig() {
         else if (sscanf_s(line, "smooth_alpha=%f", &g_cfg.smooth_alpha) == 1) {}
         else if (sscanf_s(line, "smooth_median=%d", &g_cfg.smooth_median) == 1) {}
         else if (sscanf_s(line, "smooth_deadband=%f", &g_cfg.smooth_deadband) == 1) {}
+        else if (sscanf_s(line, "trigger_touch_strength=%f", &g_cfg.trigger_touch_strength) == 1) {}
+        else if (sscanf_s(line, "splay_factor=%f", &g_cfg.splay_factor) == 1) {}
         else {
             char key[64] = {}, val[256] = {};
             if (sscanf_s(line, " %63[^=]=%255s", key, (unsigned)sizeof(key), val, (unsigned)sizeof(val)) == 2) {
@@ -852,6 +859,9 @@ int main(int argc, char* argv[]) {
                 ImGui::SliderInt("Median Window", &g_cfg.smooth_median, 1, 9);
                 if (g_cfg.smooth_median % 2 == 0) g_cfg.smooth_median++; // force odd
                 ImGui::SliderFloat("Deadband", &g_cfg.smooth_deadband, 0, 0.2f, "%.3f");
+                ImGui::Separator();
+                ImGui::SliderFloat("Trig Touch Curl", &g_cfg.trigger_touch_strength, 0.0f, 1.5f, "%.2f");
+                ImGui::SliderFloat("Finger Splay", &g_cfg.splay_factor, 0.0f, 1.0f, "%.2f");
                 ImGui::Separator();
 
                 // Manual override

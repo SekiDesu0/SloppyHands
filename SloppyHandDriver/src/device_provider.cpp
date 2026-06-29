@@ -34,6 +34,16 @@ void DeviceProvider::RunFrame() {
 
     bool want_proxy = VTableHook::VirtualEnabled();
 
+    // If user wants proxies but Quest controllers haven't been discovered yet,
+    // force a container rescan. Quest controllers often finish SteamVR init
+    // after our driver's Init() runs, so the initial scan may miss them.
+    if (want_proxy) {
+        if (!VTableHook::IsQuestDetected(vr::TrackedControllerRole_LeftHand) ||
+            !VTableHook::IsQuestDetected(vr::TrackedControllerRole_RightHand)) {
+            VTableHook::RescanContainers();
+        }
+    }
+
     // Only register proxy devices when virtual controllers are enabled,
     // so SteamVR status window shows a clean pair of controllers at boot.
     // Once registered they persist (no TrackedDeviceRemoved API) but report

@@ -119,7 +119,7 @@ static void CaptureScalar(int role_idx, const char* path, float value)
 // ---------------------------------------------------------------------------
 // Rescan containers
 // ---------------------------------------------------------------------------
-static void RescanContainers()
+void VTableHook::RescanContainers()
 {
     vr::IVRProperties* props_raw = vr::VRPropertiesRaw();
     if (!props_raw) return;
@@ -228,7 +228,7 @@ static vr::EVRInputError __fastcall HookedCreateBooleanComponent(
         auto it = g_container_map.find(ulContainer);
         if (it == g_container_map.end())
         {
-            RescanContainers();
+            VTableHook::RescanContainers();
             it = g_container_map.find(ulContainer);
         }
         if (it != g_container_map.end() && strstr(it->second.model, "Quest") != nullptr)
@@ -290,7 +290,7 @@ static vr::EVRInputError __fastcall HookedCreateScalarComponent(
         auto it = g_container_map.find(ulContainer);
         if (it == g_container_map.end())
         {
-            RescanContainers();
+            VTableHook::RescanContainers();
             it = g_container_map.find(ulContainer);
         }
         if (it != g_container_map.end() && strstr(it->second.model, "Quest") != nullptr)
@@ -367,7 +367,7 @@ bool VTableHook::HookIVRDriverInput()
     if (!install_hook(2, reinterpret_cast<void*>(HookedCreateScalarComponent)))   return false;
     if (!install_hook(3, reinterpret_cast<void*>(HookedUpdateScalarComponent)))   return false;
 
-    RescanContainers();
+    VTableHook::RescanContainers();
 
     g_hooked = true;
     vr::VRDriverLog()->Log("[VTableHook] Hooks installed on indices 0-3 (input capture mode)");
@@ -686,6 +686,15 @@ void VTableHook::RunFrame(vr::IVRDriverInput* pInput)
 
         MyFingerCurls curls = {};
         MyFingerSplays splays = {};
+        if (g_shm_state && g_shm_state->magic == DriverSharedState::kMagic)
+        {
+            float sf = g_shm_state->splay_factor;
+            splays.thumb  = sf;
+            splays.index  = sf;
+            splays.middle = sf;
+            splays.ring   = sf;
+            splays.pinky  = sf;
+        }
 
         if (s_have_gui)
         {

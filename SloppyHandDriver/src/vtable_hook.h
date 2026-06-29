@@ -74,6 +74,10 @@ public:
 
     // Get the pivot offset for a given hand role (from shared memory, set by GUI)
     static vr::HmdVector3_t GetPivotOffset(vr::ETrackedControllerRole role);
+
+    // Force a rescan of tracked device containers (e.g. when Quest controllers
+    // finish init after our driver's Init() runs)
+    static void RescanContainers();
 };
 
 // Called by proxy device to register its skeleton handle for per-frame updates
